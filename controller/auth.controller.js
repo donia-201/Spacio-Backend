@@ -1,145 +1,188 @@
-import User from "../models/User.js";
+import User from "../models/user.js";
 import generateToken from "../utils/generateToken.js";
+import notify from "../utils/notify.js";
+import { badRequest, conflict, unauthorized } from "../utils/apiError.js";
 
-// sign up function
+// The shape the client needs to decide what to render. Sending the whole
+// document on signup/login keeps it to one call.
+const publicUser = (user) => ({
+  _id: user._id,
+  firstName: user.firstName,
+  lastName: user.lastName,
+  email: user.email,
+  phone: user.phone ?? "",
+  role: user.role,
+  profileImage: user.profileImage ?? null,
+  locationPermission: user.locationPermission,
+  location: user.location?.coordinates ? user.location : null,
+  governorate: user.governorate ?? "",
+  city: user.city ?? "",
+  searchRadius: user.searchRadius,
+  isVerified: user.isVerified,
+  createdAt: user.createdAt,
+});
+
 export const signup = async (req, res) => {
-  try {
-    const { firstName, lastName, email, password, phone } = req.body;
+  const { firstName, lastName, email, password, phone } = req.body;
 
-    const existingUser = await User.findOne({ email });
+  const existingUser = await User.findOne({ email });
 
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: "Email already exists",
-      });
-    }
-
-    // create new user 
-    const user = await User.create({
-      firstName,
-      lastName,
-      email,
-      password,
-      phone,
-    });
-// generate tokens
-    const token = generateToken({
-      id: user._id,
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: "Account created successfully",
-      token,
-      data: {
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+  if (existingUser) {
+    throw conflict("Email already exists");
   }
+
+  const user = await User.create({
+    firstName,
+    lastName,
+    email,
+    password,
+    phone,
+    // role / locationPermission intentionally left at their defaults:
+    // "user" and "pending". Clients may not self-assign a role.
+  });
+
+  const token = generateToken({ id: user._id });
+
+  // Kick off the flow the product wants: right after signup the user is told
+  // to turn on location. The client renders a prompt until it's read.
+  await notify({
+    user,
+    type: "welcome",
+    data: { route: "/home" },
+  });
+
+  await notify({ user, type: "location_permission" });
+
+  return res.status(201).json({
+    success: true,
+    message: "Account created successfully",
+    token,
+    data: publicUser(user),
+  });
 };
- // login function 
+
 export const login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
+  const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).select("+password");
+  const user = await User.findOne({ email }).select("+password");
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password",
-      });
-    }
-// compare passwords
-    const isMatched = await user.comparePassword(password);
+  // Same message either way so the endpoint can't be used to enumerate
+  // registered email addresses.
+  if (!user) throw unauthorized("Invalid email or password");
 
-    if (!isMatched) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid email or password",
-      });
-    }
+  const isMatched = await user.comparePassword(password);
 
-    user.lastLogin = new Date();
-    await user.save();
+  if (!isMatched) throw unauthorized("Invalid email or password");
 
-    const token = generateToken({
-      id: user._id,
-    });
+  if (!user.isActive) throw unauthorized("This account has been disabled");
 
-    return res.status(200).json({
-      success: true,
-      message: "Login successful",
-      token,
-      data: {
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  user.lastLogin = new Date();
+  await user.save();
+
+  const token = generateToken({ id: user._id });
+
+  return res.status(200).json({
+    success: true,
+    message: "Login successful",
+    token,
+    data: publicUser(user),
+  });
 };
 
 export const getProfile = async (req, res) => {
   return res.status(200).json({
     success: true,
-    data: req.user,
+    data: publicUser(req.user),
   });
 };
 
-export const changePassword = async (
-  req,
-  res
-) => {
-  try {
-    const { oldPassword, newPassword } =
-      req.body;
+export const updateProfile = async (req, res) => {
+  const { firstName, lastName, phone, profileImage } = req.body;
 
-    const user = await User.findById(
-      req.user._id
-    ).select("+password");
+  const user = await User.findById(req.user._id);
 
-    const isMatched =
-      await user.comparePassword(
-        oldPassword
-      );
+  if (!user) throw unauthorized("User not found");
 
-    if (!isMatched) {
-      return res.status(400).json({
-        success: false,
-        message: "Wrong password",
-      });
-    }
+  if (firstName !== undefined) user.firstName = firstName;
+  if (lastName !== undefined) user.lastName = lastName;
+  if (phone !== undefined) user.phone = phone;
+  if (profileImage !== undefined) user.profileImage = profileImage;
 
-    user.password = newPassword;
+  await user.save();
 
+  return res.status(200).json({
+    success: true,
+    message: "Profile updated successfully",
+    data: publicUser(user),
+  });
+};
+
+// =========================
+// Location
+// =========================
+
+// Called by the client right after the browser geolocation prompt resolves.
+export const updateLocation = async (req, res) => {
+  const {
+    latitude,
+    longitude,
+    governorate,
+    city,
+    permission = "granted",
+  } = req.body;
+
+  const user = await User.findById(req.user._id);
+
+  if (!user) throw unauthorized("User not found");
+
+  if (permission === "denied") {
+    // Keep whatever position we already had; just remember the answer so we
+    // stop showing the prompt.
+    user.locationPermission = "denied";
     await user.save();
 
     return res.status(200).json({
       success: true,
-      message:
-        "Password updated successfully",
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message,
+      message: "Location permission declined",
+      data: publicUser(user),
     });
   }
+
+  // GeoJSON order is [longitude, latitude] — the reverse of what the
+  // browser gives us.
+  user.location = {
+    type: "Point",
+    coordinates: [Number(longitude), Number(latitude)],
+  };
+  user.locationPermission = "granted";
+  if (governorate) user.governorate = governorate;
+  if (city) user.city = city;
+
+  await user.save();
+
+  return res.status(200).json({
+    success: true,
+    message: "Location saved successfully",
+    data: publicUser(user),
+  });
 };
 
+export const changePassword = async (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+
+  const user = await User.findById(req.user._id).select("+password");
+
+  if (!user) throw unauthorized("User not found");
+
+  const isMatched = await user.comparePassword(oldPassword);
+
+  if (!isMatched) throw badRequest("Wrong password");
+
+  user.password = newPassword;
+  await user.save();
+
+  return res.status(200).json({
+    success: true,
+    message: "Password updated successfully",
+  });
+};

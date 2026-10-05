@@ -1,5 +1,5 @@
-
 import jwt from "jsonwebtoken";
+
 import User from "../models/user.js";
 
 const auth = async (req, res, next) => {
@@ -15,10 +15,20 @@ const auth = async (req, res, next) => {
 
     const token = authorization.split(" ")[1];
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (error) {
+      // Tell an expired token apart from a bad one, otherwise the client
+      // can't tell "session expired, re-login" from "real failure".
+      const expired = error.name === "TokenExpiredError";
+      return res.status(401).json({
+        success: false,
+        message: expired ? "Session expired" : "Invalid token",
+        reason: expired ? "token_expired" : "invalid_token",
+      });
+    }
 
     const user = await User.findById(decoded.id);
 
@@ -26,6 +36,16 @@ const auth = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "User not found",
+        reason: "user_not_found",
+      });
+    }
+
+    // A deactivated account must not keep working off an old token.
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been disabled",
+        reason: "account_disabled",
       });
     }
 
@@ -36,6 +56,7 @@ const auth = async (req, res, next) => {
     return res.status(401).json({
       success: false,
       message: "Invalid token",
+      reason: "invalid_token",
     });
   }
 };

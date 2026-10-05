@@ -39,6 +39,13 @@ const organizationMembershipSchema =
         default: "pending",
       },
 
+      // Optional reason shown to the requester when a request is declined.
+      decisionNote: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
       joinedAt: {
         type: Date,
       },

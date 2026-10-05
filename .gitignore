@@ -1,2 +1,7 @@
 node_modules/
 .env
+npm-debug.log*
+*.log
+smoke.progress.log
+server.out.log
+server.err.log

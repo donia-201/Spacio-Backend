@@ -1,30 +1,42 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-
 import app from "./app.js";
 import connectDB from "./config/db.js";
 
-const PORT =
-  process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
-const startServer =
-  async () => {
-    try {
-      await connectDB();
+const startServer = async () => {
+  // Refuses to boot without a database — see config/db.js.
+  await connectDB();
 
-      app.listen(
-        PORT,
-        () => {
-          console.log(
-            `Server running on port ${PORT}`
-          );
-        }
-      );
-    } catch (error) {
-      console.log(error);
+  const server = app.listen(PORT, () => {
+    console.log(`Spacio API listening on port ${PORT}`);
+  });
+
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+      console.error(`Port ${PORT} is already in use.`);
+    } else {
+      console.error(error);
     }
+
+    process.exit(1);
+  });
+
+  // Render/Railway/Fly restart the process with SIGTERM; drain connections
+  // first so in-flight requests are not cut off.
+  const shutdown = (signal) => () => {
+    console.log(`${signal} received, closing server`);
+
+    server.close(() => process.exit(0));
   };
 
-startServer();
+  process.on("SIGTERM", shutdown("SIGTERM"));
+  process.on("SIGINT", shutdown("SIGINT"));
+};
 
+startServer().catch((error) => {
+  console.error(error.message ?? error);
+  process.exit(1);
+});

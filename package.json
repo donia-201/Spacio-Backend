@@ -4,10 +4,14 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
-    
+    "dev": "nodemon index.js",
+    "smoke": "node scripts/smoke.js",
+    "seed:organizations": "node scripts/seedOrganizations.js",
+    "seed:staff": "node scripts/seedStaff.js",
+    "seed:resources": "node scripts/seedResources.js"
   },
   "dependencies": {
+    "axios": "^1.19.0",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
@@ -23,6 +27,9 @@
   },
   "description": "",
   "main": "index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC"

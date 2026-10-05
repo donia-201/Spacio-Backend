@@ -47,6 +47,14 @@ const bookingSchema = new mongoose.Schema(
       ref: "User",
     },
 
+    // Why a booking was approved, rejected or cancelled. Shown to whoever
+    // raised the request.
+    decisionNote: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     notes: String,
   },
   {
@@ -59,6 +67,10 @@ bookingSchema.index({
   startTime: 1,
   endTime: 1,
 });
+
+// The staff queue and the "my bookings" tab both filter by status.
+bookingSchema.index({ status: 1, createdAt: -1 });
+bookingSchema.index({ user: 1, createdAt: -1 });
 
 const Booking =
   mongoose.models.Booking ||
