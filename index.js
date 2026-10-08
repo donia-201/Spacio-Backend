@@ -10,7 +10,7 @@ const startServer = async () => {
   // Refuses to boot without a database — see config/db.js.
   await connectDB();
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, "0.0.0.0",() => {
     console.log(`Spacio API listening on port ${PORT}`);
   });
 
